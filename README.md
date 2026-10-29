@@ -13,8 +13,6 @@ why; and re-runs each OS's configuration with every alternative to show what swi
 
 Or with Docker: `docker compose up --build`.
 
-Tests: `pip install -r requirements-dev.txt`, then `python -m pytest`.
-
 ## Layout
 
 | Path | Purpose |
@@ -31,10 +29,10 @@ Tests: `pip install -r requirements-dev.txt`, then `python -m pytest`.
 | `paging/charts.py` | The three Explore charts and their written descriptions |
 | `precompute.py` | Runs all 16 page size x access pattern combinations and saves `results/results.json` |
 | `paging/whatif.py` | What-if analysis: each OS's configuration against every other organization and its alternative page size |
-| `tests/` | pytest suite (65 tests): tables, TLB, simulator, sweeps, ranking, what-if |
 | `diagrams.py` | Graphviz diagrams: the Page-table types tab, and the Simulator's live memory map |
+| `paging/x64.py` | Windows x64 four-level paging (PML4/PDPT/PD/PT): real entry format and flags, demand-zero faults, protection faults, 2 MB pages, TLB and page-walk cache; behind the Windows x64 paging page |
 | `paging/machine.py` | The simulator's machine: TLB, demand paging, FIFO/LRU replacement, step-by-step lookups; the tiny `MachineConfig` used by the Simulator page |
-| `views/` | The three pages: `simulator.py`, `analysis.py`, `about.py` |
+| `views/` | The four pages: `simulator.py`, `x64.py`, `analysis.py`, `about.py` |
 | `app.py` | Entry point: navigation between Simulator, Analysis (Overview, Page-table types, Explore, Real operating systems with the what-if analysis; reads the saved results) and About us |
 | `deliverables/paging_presentation.pptx`, `deliverables/paging_report.docx` | Deck and report, generated from the simulator's output |
 
