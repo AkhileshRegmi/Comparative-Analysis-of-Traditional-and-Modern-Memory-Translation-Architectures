@@ -274,7 +274,8 @@ if results:
     m[3].metric(f"Page tables (flat: {size(FLAT_TABLE_BYTES)})", size(machine.table_bytes()))
 
 st.subheader("The page tables, live")
-st.caption("Only tables that hold something exist. Orange: the latest walk · Blue: skipped by the walk cache.")
+st.caption("Only tables that hold something exist; empty slots are grouped. Level 1 entries show the physical "
+           "page they map. Orange: the latest walk, ending in RAM · Blue: skipped by the walk cache.")
 st.graphviz_chart(x64_tree(machine, last), width="content")
 
 # ---- real hardware -----------------------------------------------------------------------------------------------

@@ -332,12 +332,13 @@ def live_map(machine, org: str, last) -> str:
 CACHED = "#2563eb"        # entries the page-walk cache supplied without a memory read
 
 
-def x64_tree(machine, last, max_rows: int = 6) -> str:
-    """The process's four-level tree, only the tables that exist: level 4 (top) down to level 1.
+def x64_tree(machine, last) -> str:
+    """The process's four-level tree, only the tables that exist: level 4 (top) down to level 1, then RAM.
 
-    Each table lists its used entries (at most max_rows, plus any on the latest walk). The latest walk is orange;
+    Each table shows all 512 slots: every used entry, with the empty ones between them grouped into ranges. Entries
+    that map a page show its physical address. The latest walk is orange and ends at its physical address in RAM;
     levels the page-walk cache skipped are blue."""
-    from paging.x64 import ADDR_MASK, ENTRIES, LEVEL_LABEL, LEVELS, SHIFT, flags
+    from paging.x64 import ADDR_MASK, ENTRIES, LEVEL_LABEL, LEVELS, SHIFT, flags, fmt_pa
 
     out = ['rankdir=LR; bgcolor="transparent"; nodesep=0.15; ranksep=0.5;',
            'node [shape=plaintext fontname="Helvetica" fontsize=11];',
@@ -345,6 +346,7 @@ def x64_tree(machine, last, max_rows: int = 6) -> str:
     edges = []
 
     hot: dict[tuple[int, int], str] = {}      # (table, index) -> colour, along the latest walk
+    leaf = None                               # (table, index) of the entry that mapped the latest page
     if last is not None and (last.steps or last.tlb_hit):
         cached = {s.level for s in last.steps[last.retry_at or 0:] if s.cached}
         table = machine.cr3
@@ -355,6 +357,7 @@ def x64_tree(machine, last, max_rows: int = 6) -> str:
                 break
             hot[(table, i)] = CACHED if lvl in cached else HOT
             if lvl == "PT" or flags(raw)["PS"]:
+                leaf = (table, i)
                 break
             table = raw & ADDR_MASK
 
@@ -369,19 +372,20 @@ def x64_tree(machine, last, max_rows: int = 6) -> str:
         sub = f"{len(entries)} of 512 used"
         if names and level != "PML4":
             sub += "<br/>" + ", ".join(names[:2]) + (" …" if len(names) > 2 else "")
-        shown = sorted(entries)
-        extra = 0
-        if len(shown) > max_rows:
-            keep = set(shown[:max_rows]) | {i for t, i in hot if t == pa}
-            extra = len(shown) - len(keep)
-            shown = sorted(keep)
-        rows = []
-        for i in shown:
+        rows, prev = [], -1
+
+        def gap(a, b):
+            if b >= a:
+                rows.append(_cell("", f"[{a}–{b}] empty" if b > a else f"[{a}] empty", muted=True))
+
+        for i in sorted(entries):
+            gap(prev + 1, i - 1)
+            prev = i
             raw = entries[i]
             f = flags(raw)
             colour = hot.get((pa, i))
             if level == "PT" or f["PS"]:
-                text = f"[{i}] → {'2 MB page' if f['PS'] else 'page'}"
+                text = f"[{i}] → {'2 MB page at ' if f['PS'] else ''}{fmt_pa(raw & ADDR_MASK)}"
                 fill = PROC_FILL[1] if f["U/S"] else PROC_FILL[4]
                 rows.append(_cell(f"i{i}", text, fill, hot=colour is not None).replace(HOT, colour or HOT))
             else:
@@ -389,9 +393,19 @@ def x64_tree(machine, last, max_rows: int = 6) -> str:
                 rows.append(_cell(f"i{i}", f"[{i}] → next table", hot=colour is not None).replace(HOT, colour or HOT))
                 style = f' [color="{colour}" penwidth=2.4]' if colour else ""
                 edges.append(f"t{pa}:i{i} -> t{child}{style};")
-        if extra:
-            rows.append(_cell("", f"… {extra} more", muted=True))
-        out.append(_node(f"t{pa}", f"{LEVEL_LABEL[level]} table", sub,
-                         rows or [_cell("", "empty", muted=True)]))
+        gap(prev + 1, ENTRIES - 1)
+        out.append(_node(f"t{pa}", f"{LEVEL_LABEL[level]} table", sub, rows))
+
+    # The end of the latest walk: the physical address it produced, or why it was blocked.
+    if leaf is not None:
+        if last.pa is not None:
+            out.append(f'ram [shape=box style="rounded,filled" fillcolor="#dcfce7" color="#16a34a" penwidth=2 '
+                       f'label="RAM\\nphysical address\\n{fmt_pa(last.pa)}"];')
+            colour = "#16a34a"
+        else:
+            out.append(f'ram [shape=box style="rounded,filled" fillcolor="#fee2e2" color="#dc2626" penwidth=2 '
+                       f'label="Blocked\\n{last.short}"];')
+            colour = "#dc2626"
+        edges.append(f't{leaf[0]}:i{leaf[1]} -> ram [color="{colour}" penwidth=2.4];')
     return "digraph {\n    " + "\n    ".join(out + edges) + "\n}"
 
