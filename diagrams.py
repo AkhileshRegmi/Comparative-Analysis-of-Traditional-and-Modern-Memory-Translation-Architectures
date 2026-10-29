@@ -327,3 +327,71 @@ def live_map(machine, org: str, last) -> str:
             edges.append(_edge(f"it:i{frame}", f"pm:f{frame}", (p, v) == hot_key))
 
     return "digraph {\n    " + "\n    ".join(out + edges) + "\n}"
+
+
+CACHED = "#2563eb"        # entries the page-walk cache supplied without a memory read
+
+
+def x64_tree(machine, last, max_rows: int = 6) -> str:
+    """The process's four-level tree, only the tables that exist: level 4 (top) down to level 1.
+
+    Each table lists its used entries (at most max_rows, plus any on the latest walk). The latest walk is orange;
+    levels the page-walk cache skipped are blue."""
+    from paging.x64 import ADDR_MASK, ENTRIES, LEVEL_LABEL, LEVELS, SHIFT, flags
+
+    out = ['rankdir=LR; bgcolor="transparent"; nodesep=0.15; ranksep=0.5;',
+           'node [shape=plaintext fontname="Helvetica" fontsize=11];',
+           'edge [arrowsize=0.6 penwidth=1.1 color="#777777"];']
+    edges = []
+
+    hot: dict[tuple[int, int], str] = {}      # (table, index) -> colour, along the latest walk
+    if last is not None and (last.steps or last.tlb_hit):
+        cached = {s.level for s in last.steps[last.retry_at or 0:] if s.cached}
+        table = machine.cr3
+        for lvl in LEVELS:
+            i = (last.va >> SHIFT[lvl]) & (ENTRIES - 1)
+            raw = machine.tables[table].get(i)
+            if raw is None:
+                break
+            hot[(table, i)] = CACHED if lvl in cached else HOT
+            if lvl == "PT" or flags(raw)["PS"]:
+                break
+            table = raw & ADDR_MASK
+
+    first = next(iter(hot.values()), None)
+    out.append('start [shape=box style="rounded,filled" fillcolor="#e5edfb" label="Start\n(CR3)"];')
+    edges.append(f'start -> t{machine.cr3} [color="{first}" penwidth=2.4];' if first else f"start -> t{machine.cr3};")
+
+    for pa, entries in machine.tables.items():
+        level, base = machine.table_info[pa]
+        span = 1 << (SHIFT[level] + 9)
+        names = [r.name for r in machine.regions if r.base < base + span and r.end > base]
+        sub = f"{len(entries)} of 512 used"
+        if names and level != "PML4":
+            sub += "<br/>" + ", ".join(names[:2]) + (" …" if len(names) > 2 else "")
+        shown = sorted(entries)
+        extra = 0
+        if len(shown) > max_rows:
+            keep = set(shown[:max_rows]) | {i for t, i in hot if t == pa}
+            extra = len(shown) - len(keep)
+            shown = sorted(keep)
+        rows = []
+        for i in shown:
+            raw = entries[i]
+            f = flags(raw)
+            colour = hot.get((pa, i))
+            if level == "PT" or f["PS"]:
+                text = f"[{i}] → {'2 MB page' if f['PS'] else 'page'}"
+                fill = PROC_FILL[1] if f["U/S"] else PROC_FILL[4]
+                rows.append(_cell(f"i{i}", text, fill, hot=colour is not None).replace(HOT, colour or HOT))
+            else:
+                child = raw & ADDR_MASK
+                rows.append(_cell(f"i{i}", f"[{i}] → next table", hot=colour is not None).replace(HOT, colour or HOT))
+                style = f' [color="{colour}" penwidth=2.4]' if colour else ""
+                edges.append(f"t{pa}:i{i} -> t{child}{style};")
+        if extra:
+            rows.append(_cell("", f"… {extra} more", muted=True))
+        out.append(_node(f"t{pa}", f"{LEVEL_LABEL[level]} table", sub,
+                         rows or [_cell("", "empty", muted=True)]))
+    return "digraph {\n    " + "\n    ".join(out + edges) + "\n}"
+
