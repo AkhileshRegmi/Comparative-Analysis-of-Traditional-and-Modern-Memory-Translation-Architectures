@@ -1,0 +1,110 @@
+<!-- Measures the cost of TLB misses on the viewer's own machine. Runs entirely in the browser; sends nothing.
+
+A pointer chase visits the same number of cache lines two ways: packed into a few pages, or spread one per 4 KB page.
+Cache behaviour is about the same; only the second needs a different page translation for every read, so once
+its pages outgrow the TLB each read also pays a page walk. The gap between the two lines is that walk. -->
+<style>
+body{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2937}
+.top{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+button{font:inherit;font-size:17px;font-weight:600;padding:9px 18px;border-radius:10px;border:0;background:#2563eb;
+  color:#fff;cursor:pointer}
+button:disabled{background:#93c5fd;cursor:default}
+#status{color:#6b7280;font-size:15px}
+svg{width:100%;height:auto;display:block;margin-top:10px}
+#verdict{font-size:20px;font-weight:700;margin-top:6px;min-height:28px}
+#verdict small{display:block;font-size:14px;font-weight:500;color:#6b7280}
+.legend{display:flex;gap:18px;font-size:14px;color:#374151;margin-top:4px}
+.legend i{display:inline-block;width:14px;height:4px;border-radius:2px;vertical-align:middle;margin-right:6px}
+</style>
+<div class="top">
+  <button id="run">▶ Measure this computer</button>
+  <span id="status">About 5 seconds. Runs in your browser on your own CPU; nothing is sent anywhere.</span>
+</div>
+<div class="legend"><span><i style="background:#ea580c"></i>spread: one read per 4 KB page</span>
+  <span><i style="background:#16a34a"></i>packed: same reads, few pages</span></div>
+<svg id="chart" viewBox="0 0 900 300" role="img" aria-label="Time per memory read against number of pages touched"></svg>
+<div id="verdict"></div>
+<script>
+const PAGES = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
+const STEPS = 1 << 21;
+const W = 900, H = 300, L = 56, R = 36, T = 14, B = 44;
+const svg = document.getElementById("chart");
+let sink = 0;
+
+function chain(n, spread) {
+  // Each slot holds the index of the next slot; the visiting order is random so the prefetcher cannot help.
+  const stride = spread ? 1024 : 16;                       // 4 KB or 64 B apart (in 4-byte ints)
+  const slot = (i) => i * stride + (spread ? ((i * 7) % 64) * 16 : 0);   // vary the cache line inside each page
+  const a = new Int32Array(n * stride + 1024);
+  const order = Array.from({length: n}, (_, i) => i);
+  for (let i = n - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  for (let k = 0; k < n; k++) a[slot(order[k])] = slot(order[(k + 1) % n]);
+  return [a, slot(order[0])];
+}
+function chase(a, p, steps) { for (let i = 0; i < steps; i++) p = a[p]; return p; }
+function measure(n, spread) {
+  const [a, start] = chain(n, spread);
+  let p = chase(a, start, Math.max(4 * n, 100000));         // warm up caches, TLB and the JIT
+  let best = Infinity;
+  for (let r = 0; r < 3; r++) {
+    const t0 = performance.now(); p = chase(a, p, STEPS); const t = performance.now() - t0;
+    best = Math.min(best, t * 1e6 / STEPS);
+  }
+  sink ^= p;
+  return best;
+}
+
+const x = (i) => L + (W - L - R) * i / (PAGES.length - 1);
+const size = (b) => b >= 1 << 20 ? (b >> 20) + " MB" : (b >> 10) + " KB";
+function draw(spread, packed) {
+  const top = Math.max(1, ...spread, ...packed) * 1.15;
+  const y = (v) => T + (H - T - B) * (1 - v / top);
+  let s = `<line x1="${L}" y1="${H - B}" x2="${W - R}" y2="${H - B}" stroke="#d1d5db"/>`;
+  for (let k = 0; k <= 4; k++) {
+    const v = top * k / 4;
+    s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#f3f4f6"/>` +
+         `<text x="${L - 8}" y="${y(v) + 4}" font-size="12" fill="#6b7280" text-anchor="end">${v.toFixed(1)}</text>`;
+  }
+  PAGES.forEach((n, i) => {
+    if (i % 2 === 0 || i === PAGES.length - 1)
+      s += `<text x="${x(i)}" y="${H - B + 18}" font-size="12" fill="#6b7280" text-anchor="middle">${n >= 1024 ? n / 1024 + "K" : n}</text>` +
+           `<text x="${x(i)}" y="${H - B + 33}" font-size="11" fill="#9ca3af" text-anchor="middle">${size(n * 4096)}</text>`;
+  });
+  s += `<text x="12" y="${T + 6}" font-size="12" fill="#6b7280" transform="rotate(-90 12 ${T + 6})" text-anchor="end">ns per read</text>`;
+  for (const [vals, colour] of [[packed, "#16a34a"], [spread, "#ea580c"]]) {
+    if (!vals.length) continue;
+    s += `<polyline fill="none" stroke="${colour}" stroke-width="3" stroke-linejoin="round" points="${vals.map((v, i) => x(i) + "," + y(v)).join(" ")}"/>`;
+    vals.forEach((v, i) => s += `<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="${colour}"/>`);
+  }
+  const knee = spread.findIndex((v, i) => i < packed.length && v > packed[i] * 1.5);
+  if (knee > 0) s += `<line x1="${x(knee - 0.5)}" x2="${x(knee - 0.5)}" y1="${T}" y2="${H - B}" stroke="#6b7280" stroke-dasharray="5 4"/>` +
+    `<text x="${x(knee - 0.5) + 6}" y="${T + 12}" font-size="13" fill="#374151">TLB runs out (≈ ${PAGES[knee - 1]} pages)</text>`;
+  svg.innerHTML = s;
+}
+draw([], []);
+
+const btn = document.getElementById("run"), status = document.getElementById("status"), verdict = document.getElementById("verdict");
+btn.onclick = async () => {
+  btn.disabled = true; verdict.innerHTML = "";
+  const spread = [], packed = [];
+  try {
+    for (const [i, n] of PAGES.entries()) {
+      status.textContent = `Touching ${n.toLocaleString()} pages (${i + 1} of ${PAGES.length})…`;
+      await new Promise((r) => setTimeout(r, 30));
+      packed.push(measure(n, false));
+      spread.push(measure(n, true));
+      draw(spread, packed);
+    }
+    // Report the size with the biggest gap; at the largest sizes data-cache misses slow both lines alike.
+    const k = spread.reduce((best, v, i) => v / packed[i] > spread[best] / packed[best] ? i : best, 0);
+    const s = spread[k], p = packed[k];
+    verdict.innerHTML = `At ${PAGES[k].toLocaleString()} pages (${size(PAGES[k] * 4096)}): ${s.toFixed(1)} ns per read spread, ` +
+      `${p.toFixed(1)} ns packed. ${(s / p).toFixed(1)}× slower: that gap is the page walk.` +
+      `<small>Measured just now on this device, in this browser. Results vary between machines and runs.</small>`;
+    status.textContent = "Done. Run it again to check the result is stable.";
+  } catch (e) {
+    status.textContent = "This browser could not allocate enough memory for the test (" + e.message + ").";
+  }
+  btn.disabled = false;
+};
+</script>

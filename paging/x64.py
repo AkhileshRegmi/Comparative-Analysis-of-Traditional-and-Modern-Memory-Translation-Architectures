@@ -155,19 +155,24 @@ class Result:
     page_size: int = PAGE
     reads: int = 0
     cycles: float = 0.0
+    guest_reads: int = 0      # in a VM: table reads of the guest's own walk (each needs a host walk first)
 
 
 class Machine:
     """One Windows x64 process: its page tables, a TLB and a page-walk cache."""
 
     def __init__(self, regions=WINDOWS_LAYOUT, *, large_pages: bool = True, tlb_size: int = 16,
-                 pwc: bool = True, pwc_size: int = 4, costs: CostModel = CostModel(), seed: int = 7):
+                 pwc: bool = True, pwc_size: int = 4, nested: bool = False, costs: CostModel = CostModel(),
+                 seed: int = 7):
+        """nested: Windows runs as a guest in a virtual machine. Every guest-physical address (each table the guest
+        walk reads, and the final page) must first be translated by the host's own four-level walk."""
         self.regions = tuple(regions)
         self.large_pages = large_pages
         self.costs = costs
         self.tlb_size = tlb_size
         self.pwc_on = pwc
         self.pwc_size = pwc_size
+        self.nested = nested
         self._rng = random.Random(seed)
         self._used: set[int] = set()
         self.tables: dict[int, dict[int, int]] = {}         # physical address -> {index: raw entry}
@@ -315,7 +320,7 @@ class Machine:
                 failed = res.steps[-1]
                 where = f"the {failed.level} entry {failed.index} is empty (P=0)"
                 if r is None or (not r.user and mode == "user"):
-                    self._finish_reads(res)
+                    self._finish_reads(res, leaf=False)
                     res.outcome = "access violation"
                     res.short = "never allocated"
                     res.message = (f"Page fault: {where}. Windows checks its list of the process's memory regions "
@@ -334,7 +339,7 @@ class Machine:
             leaf_raw = self.tables[table][i]
             leaf = (table, i)
             res.page_size = size
-            self._finish_reads(res)
+            self._finish_reads(res, leaf=True)
             for lvl, nxt, rts in walked:
                 self._pwc_put(lvl, va, nxt, rts)
             self._tlb_put(va, size, leaf_raw, rights)
@@ -362,8 +367,11 @@ class Machine:
             res.message = f"Translated to physical address {fmt_pa(res.pa)}."
         return res
 
-    def _finish_reads(self, res: Result) -> None:
-        res.reads = sum(1 for s in res.steps if not s.cached)
+    def _finish_reads(self, res: Result, leaf: bool) -> None:
+        res.reads = res.guest_reads = sum(1 for s in res.steps if not s.cached)
+        if self.nested:
+            # Host walk (4 reads) before each guest table read, and one more for the page the guest found.
+            res.reads = res.guest_reads * (len(LEVELS) + 1) + (len(LEVELS) if leaf else 0)
         res.cycles = self.costs.tlb_hit + res.reads * self.costs.mem_ref
 
     # ---- totals --------------------------------------------------------------------------------------------------

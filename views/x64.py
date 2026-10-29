@@ -1,5 +1,6 @@
 """Windows x64 paging demo: click a scenario and watch the four-level walk (TLB -> level 4 ... level 1 -> RAM)."""
 import random
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -34,8 +35,10 @@ with gear.popover("⚙ Hardware", width="stretch"):
     large = st.toggle("Large pages (2 MB)", True)
     pwc = st.toggle("Page-walk cache", True)
     tlb_size = st.select_slider("TLB entries", [0, 4, 16, 64], 16)
+    vm = st.toggle("Inside a virtual machine", False, help="Windows runs as a guest (Hyper-V, VirtualBox, the "
+                   "cloud). Every table address the guest walk uses must first go through the host's own four levels.")
 
-machine = Machine(large_pages=large, tlb_size=tlb_size, pwc=pwc, costs=COSTS)
+machine = Machine(large_pages=large, tlb_size=tlb_size, pwc=pwc, nested=vm, costs=COSTS)
 for va, acc, mode in state.x64_history:
     machine.access(va, acc, mode)
 results = machine.results
@@ -85,7 +88,7 @@ last = results[-1] if results else None
 
 # ---- the animated walk -------------------------------------------------------------------------------------------
 CSS = """
-body{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2937}
+body{margin:0;padding:0 8px 0 2px;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2937}
 .addr{font-family:ui-monospace,Consolas,monospace;font-size:28px;font-weight:700;letter-spacing:1px}
 .addr .meta{font-family:system-ui,sans-serif;font-size:15px;font-weight:500;color:#6b7280;margin-left:12px}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 18px}
@@ -108,6 +111,13 @@ body{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2937}
   animation:in .4s forwards}
 .banner small{display:block;font-size:15px;font-weight:500;margin-top:2px}
 .good{background:#f0fdf4;color:#166534}.evil{background:#fef2f2;color:#991b1b}
+.vm{margin-top:16px}.vm h5{margin:0 0 6px;font-size:15px;color:#6d28d9}
+.grid{display:grid;grid-template-columns:120px repeat(5,1fr);gap:4px}
+.gh{font-size:12px;color:#6b7280;text-align:center}.gl{font-size:13px;font-weight:600;align-self:center}
+.c{height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+  color:#fff;opacity:.15;animation:in .2s forwards}
+.c.host{background:#7c3aed}.c.guest{background:#ea580c}.c.ram{background:#16a34a}.c.fail{background:#dc2626}
+.c.cache{background:#dbeafe;color:#1e40af;grid-column:span 5}.c.off{background:#f3f4f6;color:#9ca3af;grid-column:span 5}
 .short{display:none}
 @media (max-width:640px){
   .short{display:inline}.long,.card .s{display:none}
@@ -115,6 +125,7 @@ body{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2937}
   .arrow{flex:0 0 8px;margin:0 1px}
   .addr{font-size:20px}.addr .meta{display:block;margin:2px 0 0}
   .banner{font-size:16px;padding:10px 12px}.banner small{font-size:13px}
+  .grid{grid-template-columns:44px repeat(5,1fr)}
 }
 @keyframes pop{to{opacity:1;transform:scale(1)}}
 @keyframes in{to{opacity:1}}
@@ -184,6 +195,7 @@ def walk_html(r) -> str:
         if css != "skip":
             t += STEP
 
+    grid, t = vm_grid(r, t) if machine.nested else ("", t)
     cost = f"{r.reads} memory read{'s' if r.reads != 1 else ''} · {r.cycles:g} cycle{'s' if r.cycles != 1 else ''}"
     if r.page_fault:
         cost += " · page fault handled by Windows"
@@ -199,13 +211,58 @@ def walk_html(r) -> str:
             f'</div>')
     # A unique comment makes the iframe re-render (and so re-animate) on every access.
     return (f"<style>{CSS}</style><!-- {len(results)} -->{head}<div class='chips'>{chip_html}</div>"
-            f"<div class='row'>{''.join(row)}</div>{banner}")
+            f"<div class='row'>{''.join(row)}</div>{grid}{banner}")
+
+
+def vm_grid(r, t: float) -> tuple[str, float]:
+    """In a VM: the final walk as a grid. Each guest level needs four host reads before its own entry read, and the
+    page it finds needs four more. Returns the html and the time after the last cell."""
+    if r.tlb_hit or not r.steps:
+        return "", t
+    final = r.steps[r.retry_at:] if r.retry_at is not None else r.steps
+    by_level = {s.level: s for s in final}
+    leaf = r.reads == r.guest_reads * (len(LEVELS) + 1) + len(LEVELS)
+    cells = (["<div></div>"] + [f'<div class="gh">Host L{k}</div>' for k in (4, 3, 2, 1)]
+             + ['<div class="gh">guest entry</div>'])
+    n = 0
+
+    def cell(css, text=""):
+        nonlocal t
+        t += 0.06
+        return f'<div class="c {css}" style="animation-delay:{t:.2f}s">{text}</div>'
+
+    rows = [(f"Guest {LEVEL_LABEL[lvl]}", by_level.get(lvl)) for lvl in LEVELS] + [("Data page", "data")]
+    for label, s in rows:
+        short = label.replace("Guest Level ", "G").replace("Data page", "Data")
+        cells.append(f'<div class="gl"><span class="long">{label}</span><span class="short">{short}</span></div>')
+        if s == "data":
+            if not leaf:
+                cells.append('<div class="c off" style="opacity:1">not reached</div>')
+                continue
+            for _ in range(4):
+                n += 1
+                cells.append(cell("host", n))
+            cells.append(cell("ram", "RAM"))
+        elif s is None:
+            cells.append('<div class="c off" style="opacity:1">not needed</div>')
+        elif s.cached:
+            cells.append('<div class="c cache" style="opacity:1">⚡ walk cache: no reads</div>')
+        else:
+            for _ in range(4):
+                n += 1
+                cells.append(cell("host", n))
+            n += 1
+            cells.append(cell("guest" if s.raw is not None else "fail", n))
+    extra = r.reads - n
+    note = f" (+{extra} in the attempt before the page fault)" if extra else ""
+    return (f'<div class="vm"><h5>Inside a virtual machine: {n} reads for this walk{note}</h5>'
+            f'<div class="grid">{"".join(cells)}</div></div>'), t
 
 
 if last is None:
     st.info("👆 Click **📦 New heap page** to start.")
 else:
-    components.html(walk_html(last), height=330, scrolling=True)
+    components.html(walk_html(last), height=600 if vm and last.steps and not last.tlb_hit else 330, scrolling=True)
 
 # ---- scoreboard and the live tree --------------------------------------------------------------------------------
 if results:
@@ -219,6 +276,11 @@ if results:
 st.subheader("The page tables, live")
 st.caption("Only tables that hold something exist. Orange: the latest walk · Blue: skipped by the walk cache.")
 st.graphviz_chart(x64_tree(machine, last), width="content")
+
+# ---- real hardware -----------------------------------------------------------------------------------------------
+st.subheader("Measure this computer")
+st.caption("Everything above is a model. This is a real test: it runs on the CPU of whoever is viewing this page.")
+components.html((Path(__file__).parent / "measure.html").read_text(encoding="utf-8"), height=470)
 
 
 # ---- details, for questions --------------------------------------------------------------------------------------

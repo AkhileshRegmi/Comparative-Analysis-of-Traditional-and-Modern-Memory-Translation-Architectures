@@ -30,7 +30,8 @@ Or with Docker: `docker compose up --build`.
 | `precompute.py` | Runs all 16 page size x access pattern combinations and saves `results/results.json` |
 | `paging/whatif.py` | What-if analysis: each OS's configuration against every other organization and its alternative page size |
 | `diagrams.py` | Graphviz diagrams: the Page-table types tab, and the Simulator's live memory map |
-| `paging/x64.py` | Windows x64 four-level paging (PML4/PDPT/PD/PT): real entry format and flags, demand-zero faults, protection faults, 2 MB pages, TLB and page-walk cache; behind the Windows x64 paging page |
+| `paging/x64.py` | Windows x64 four-level paging (PML4/PDPT/PD/PT): real entry format and flags, demand-zero faults, protection faults, 2 MB pages, TLB, page-walk cache, and nested paging inside a virtual machine (up to 24 reads); behind the Windows x64 paging page |
+| `views/measure.html` | In-browser TLB test on the viewer's own CPU: a pointer chase over pages packed versus spread; the gap is the page walk. Measured, not modelled |
 | `paging/machine.py` | The simulator's machine: TLB, demand paging, FIFO/LRU replacement, step-by-step lookups; the tiny `MachineConfig` used by the Simulator page |
 | `views/` | The four pages: `simulator.py`, `x64.py`, `analysis.py`, `about.py` |
 | `app.py` | Entry point: navigation between Simulator, Analysis (Overview, Page-table types, Explore, Real operating systems with the what-if analysis; reads the saved results) and About us |
