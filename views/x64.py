@@ -90,11 +90,11 @@ body{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2937}
 .addr .meta{font-family:system-ui,sans-serif;font-size:15px;font-weight:500;color:#6b7280;margin-left:12px}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 18px}
 .chip{border-radius:999px;padding:3px 12px;font-size:14px;font-weight:600;opacity:0;animation:in .35s forwards}
-.row{display:flex;align-items:stretch;flex-wrap:wrap;gap:4px 0}
-.card{width:128px;min-height:96px;border-radius:14px;padding:10px;box-sizing:border-box;text-align:center;
+.row{display:flex;align-items:stretch}
+.card{flex:1 1 0;min-width:0;min-height:96px;border-radius:14px;padding:10px;box-sizing:border-box;text-align:center;
   border:2px solid #e5e7eb;background:#f9fafb;opacity:.25;transform:scale(.9);animation:pop .4s forwards}
 .card h4{margin:0 0 6px;font-size:17px}.card .v{font-size:14px}.card .s{font-size:12px;color:#6b7280;margin-top:4px}
-.arrow{align-self:center;width:30px;height:4px;margin:0 3px;background:#e5e7eb;border-radius:2px;position:relative;
+.arrow{flex:0 0 22px;align-self:center;height:4px;margin:0 3px;background:#e5e7eb;border-radius:2px;position:relative;
   overflow:hidden}
 .arrow i{position:absolute;inset:0;width:0;animation:fill .3s forwards}
 .read{border-color:#ea580c;background:#fff7ed;box-shadow:0 0 0 4px #fed7aa}
@@ -108,6 +108,14 @@ body{margin:0;font-family:"Source Sans Pro",system-ui,sans-serif;color:#1f2937}
   animation:in .4s forwards}
 .banner small{display:block;font-size:15px;font-weight:500;margin-top:2px}
 .good{background:#f0fdf4;color:#166534}.evil{background:#fef2f2;color:#991b1b}
+.short{display:none}
+@media (max-width:640px){
+  .short{display:inline}.long,.card .s{display:none}
+  .card{padding:6px 2px;min-height:64px}.card h4{font-size:14px}.card .v{font-size:12px}
+  .arrow{flex:0 0 8px;margin:0 1px}
+  .addr{font-size:20px}.addr .meta{display:block;margin:2px 0 0}
+  .banner{font-size:16px;padding:10px 12px}.banner small{font-size:13px}
+}
 @keyframes pop{to{opacity:1;transform:scale(1)}}
 @keyframes in{to{opacity:1}}
 @keyframes fill{to{width:100%}}
@@ -169,7 +177,9 @@ def walk_html(r) -> str:
             fill = "" if css == "skip" else f'<i style="background:{colour};animation-delay:{t - STEP / 2:.2f}s"></i>'
             row.append(f'<div class="arrow">{fill}</div>')
         delay = "" if css == "skip" else f' style="animation-delay:{t:.2f}s"'
-        row.append(f'<div class="card {css}"{delay}><h4>{title}</h4><div class="v">{value}</div>'
+        short = title.replace("Level ", "L")
+        row.append(f'<div class="card {css}"{delay}><h4><span class="long">{title}</span><span class="short">{short}'
+                   f'</span></h4><div class="v">{value}</div>'
                    f'<div class="s">{sub}</div></div>')
         if css != "skip":
             t += STEP
